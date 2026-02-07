@@ -28,15 +28,15 @@ import {
 } from "./types.js";
 
 export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
-  id: "gmail",
+  id: "openclaw-gmail",
   meta: {
-    id: "gmail",
+    id: "openclaw-gmail",
     label: "Gmail",
     detailLabel: "Gmail (gog)",
     selectionLabel: "Gmail (gog)",
     systemImage: "envelope",
-    docsPath: "/channels/gmail",
-    docsLabel: "gmail",
+    docsPath: "/channels/openclaw-gmail",
+    docsLabel: "openclaw-gmail",
     blurb: "Gmail channel (gog) — per-thread sessions.",
     order: 91,
   },
@@ -45,7 +45,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
     media: false,
   },
 
-  reload: { configPrefixes: ["channels.gmail"] },
+  reload: { configPrefixes: ["channels.openclaw-gmail"] },
   // External plugin: provide JSON Schema directly (avoid extra deps).
   // Control UI expects `{ schema: <json-schema> }`.
   configSchema: {
@@ -112,7 +112,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
         cfg,
-        sectionKey: "gmail",
+        sectionKey: "openclaw-gmail",
         accountId,
         enabled,
         allowTopLevel: true,
@@ -121,7 +121,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
     deleteAccount: ({ cfg, accountId }) =>
       deleteAccountFromConfigSection({
         cfg,
-        sectionKey: "gmail",
+        sectionKey: "openclaw-gmail",
         accountId,
         clearBaseFields: ["gogAccount", "pollIntervalSec", "allowFrom", "dmPolicy", "name"],
       }),
@@ -153,9 +153,9 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId ?? DEFAULT_ACCOUNT_ID),
     applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({ cfg, sectionKey: "gmail", accountId, name }),
+      applyAccountNameToChannelSection({ cfg, sectionKey: "openclaw-gmail", accountId, name }),
     applyAccountConfig: ({ cfg, accountId }) =>
-      migrateBaseNameToDefaultAccount({ cfg, sectionKey: "gmail", accountId }),
+      migrateBaseNameToDefaultAccount({ cfg, sectionKey: "openclaw-gmail", accountId }),
   },
 
   pairing: {
@@ -168,10 +168,10 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       return {
         policy: account.config.dmPolicy ?? "allowlist",
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `channels.gmail.accounts.${account.accountId}.dmPolicy`,
+        policyPath: `channels.openclaw-gmail.accounts.${account.accountId}.dmPolicy`,
         // Core convention: allowFromPath points at the config prefix (".") not the array itself.
-        allowFromPath: `channels.gmail.accounts.${account.accountId}.`,
-        approveHint: formatPairingApproveHint("gmail"),
+        allowFromPath: `channels.openclaw-gmail.accounts.${account.accountId}.`,
+        approveHint: formatPairingApproveHint("openclaw-gmail"),
         normalizeEntry: (raw) => String(raw ?? "").trim().toLowerCase(),
       };
     },
@@ -200,7 +200,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       const account = resolveGmailAccount({ cfg, accountId: aid });
       if (!account.configured) {
         throw new Error(
-          `Gmail account ${aid} not configured (missing channels.gmail.accounts.${aid}.gogAccount)`
+          `Gmail account ${aid} not configured (missing channels.openclaw-gmail.accounts.${aid}.gogAccount)`
         );
       }
 
@@ -246,7 +246,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           ],
           { account: account.config.gogAccount }
         );
-        return { channel: "gmail", to: `thread:${threadId}` };
+        return { channel: "openclaw-gmail", to: `thread:${threadId}` };
       }
 
       // Mode B: start a new thread (treat `to` as email address)
@@ -266,7 +266,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         { account: account.config.gogAccount }
       );
 
-      return { channel: "gmail", to: normalizedTarget };
+      return { channel: "openclaw-gmail", to: normalizedTarget };
     },
   },
 
@@ -284,7 +284,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         if (!lastError) return [];
         return [
           {
-            channel: "gmail",
+            channel: "openclaw-gmail",
             accountId: account.accountId,
             kind: "runtime" as const,
             message: `Channel error: ${lastError}`,
@@ -534,9 +534,9 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             ChatType: "direct" as const,
             SenderId: senderId,
             SenderName: from,
-            Provider: "gmail",
-            Surface: "gmail",
-            OriginatingChannel: "gmail",
+            Provider: "openclaw-gmail",
+            Surface: "openclaw-gmail",
+            OriginatingChannel: "openclaw-gmail",
             OriginatingTo: `thread:${threadId}`,
             MessageSid: messageId,
             MessageThreadId: threadId,
@@ -555,7 +555,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
               createIfMissing: true,
               updateLastRoute: {
                 sessionKey,
-                channel: "gmail",
+                channel: "openclaw-gmail",
                 to: `thread:${threadId}`,
                 accountId: account.accountId,
                 threadId,

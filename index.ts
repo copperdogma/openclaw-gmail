@@ -4,7 +4,7 @@ import { gmailPlugin } from "./src/channel.js";
 import { setGmailRuntime } from "./src/runtime.js";
 
 const plugin = {
-  id: "gmail",
+  id: "openclaw-gmail",
   name: "Gmail",
   description: "OpenClaw Gmail channel plugin (gog) — per-thread sessions",
   configSchema: emptyPluginConfigSchema(),

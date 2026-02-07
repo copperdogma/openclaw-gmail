@@ -47,7 +47,7 @@
       "./index.ts"
     ],
     "channel": {
-      "id": "gmail",
+      "id": "openclaw-gmail",
       "label": "Gmail",
       "selectionLabel": "Gmail (gog)",
       "docsPath": "/channels/gmail",

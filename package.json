@@ -27,7 +27,8 @@
     "src",
     "openclaw.plugin.json",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "PUBLISHING.md"
   ],
   "peerDependencies": {
     "openclaw": ">=2026.1.0"

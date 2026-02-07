@@ -1,15 +1,15 @@
 # openclaw-gmail
 
-Gmail channel plugin for OpenClaw (via **gog**). Supports per-thread sessions, allowlist filtering, and optional Pub/Sub push for near-real-time inbox updates.
+Gmail channel plugin for OpenClaw (via **gog**). Supports per-thread sessions, allowlist filtering, and optional Pub/Sub push for near‑real‑time inbox updates.
 
 > Status: community plugin (not bundled with OpenClaw core)
 
 ## Features
-- Gmail as a **first-class OpenClaw channel** (`channels.gmail`)
-- Per-thread sessions (each Gmail thread is its own session)
+- Gmail as a **first‑class OpenClaw channel** (`channels.openclaw-gmail`)
+- Per‑thread sessions (each Gmail thread is its own session)
 - Allowlist / DM policy enforcement
 - Polling by default; **optional Pub/Sub push** for fast delivery
-- Multi-account support (`channels.gmail.accounts.<id>`) with per-account settings
+- Multi‑account support (`channels.openclaw-gmail.accounts.<id>`) with per‑account settings
 
 ## Requirements
 - **OpenClaw** `>=2026.1.0`
@@ -37,7 +37,7 @@ npm install
 #    Add to plugins.load.paths:
 #      "/path/to/your/openclaw-workspace/extensions/openclaw-gmail"
 #    Add to plugins.entries:
-#      "gmail": { "enabled": true }
+#      "openclaw-gmail": { "enabled": true }
 
 # 4. Add channel config (see Configuration section below)
 
@@ -50,7 +50,7 @@ openclaw gateway restart
 openclaw plugins install openclaw-gmail
 ```
 
-If you hit schema validation errors for `channels.gmail`, use the extensions path above.
+If you hit schema validation errors for `channels.openclaw-gmail`, use the extensions path above.
 
 ## Configuration
 
@@ -58,7 +58,7 @@ Minimum (single account):
 ```json5
 {
   channels: {
-    gmail: {
+    "openclaw-gmail": {
       enabled: true,
       gogAccount: "your@gmail.com",
       dmPolicy: "allowlist",
@@ -69,11 +69,11 @@ Minimum (single account):
 }
 ```
 
-Multi-account:
+Multi‑account:
 ```json5
 {
   channels: {
-    gmail: {
+    "openclaw-gmail": {
       accounts: {
         default: {
           enabled: true,
@@ -96,11 +96,11 @@ Multi-account:
 ```
 
 ### Pub/Sub Push (optional)
-Add a `push` block under `channels.gmail` or per account. Example:
+Add a `push` block under `channels.openclaw-gmail` or per account. Example:
 ```json5
 {
   channels: {
-    gmail: {
+    "openclaw-gmail": {
       enabled: true,
       gogAccount: "your@gmail.com",
       push: {

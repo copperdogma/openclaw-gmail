@@ -1,15 +1,15 @@
 # openclaw-gmail
 
-Gmail channel plugin for OpenClaw (via **gog**). Supports per-thread sessions, allowlist filtering, and optional Pub/Sub push for near‑real‑time inbox updates.
+Gmail channel plugin for OpenClaw (via **gog**). Supports per-thread sessions, allowlist filtering, and optional Pub/Sub push for near-real-time inbox updates.
 
 > Status: community plugin (not bundled with OpenClaw core)
 
 ## Features
-- Gmail as a **first‑class OpenClaw channel** (`channels.gmail`)
-- Per‑thread sessions (each Gmail thread is its own session)
+- Gmail as a **first-class OpenClaw channel** (`channels.gmail`)
+- Per-thread sessions (each Gmail thread is its own session)
 - Allowlist / DM policy enforcement
 - Polling by default; **optional Pub/Sub push** for fast delivery
-- Multi‑account support (`channels.gmail.accounts.<id>`) with per‑account settings
+- Multi-account support (`channels.gmail.accounts.<id>`) with per-account settings
 
 ## Requirements
 - **OpenClaw** `>=2026.1.0`
@@ -22,14 +22,28 @@ Gmail channel plugin for OpenClaw (via **gog**). Supports per-thread sessions, a
 ## Install
 
 ### Recommended (extensions directory)
-Because OpenClaw’s config schema validation can block npm‑installed channel plugins, the most reliable path today is to copy into an extensions folder.
+Because OpenClaw's config schema validation can block npm‑installed channel plugins, the most reliable path today is to clone/copy into an extensions folder.
 
 ```bash
-# Example: copy into your OpenClaw workspace extensions
-cp -r openclaw-gmail /path/to/your/openclaw-workspace/extensions/gmail
-```
+# 1. Clone (or copy) into your extensions directory
+git clone https://github.com/copperdogma/openclaw-gmail.git \
+  /path/to/your/openclaw-workspace/extensions/openclaw-gmail
 
-Restart the OpenClaw gateway after installing.
+# 2. Install dependencies
+cd /path/to/your/openclaw-workspace/extensions/openclaw-gmail
+npm install
+
+# 3. Register the plugin path in your OpenClaw config (openclaw.json)
+#    Add to plugins.load.paths:
+#      "/path/to/your/openclaw-workspace/extensions/openclaw-gmail"
+#    Add to plugins.entries:
+#      "gmail": { "enabled": true }
+
+# 4. Add channel config (see Configuration section below)
+
+# 5. Restart the gateway
+openclaw gateway restart
+```
 
 ### npm (experimental)
 ```bash
@@ -55,7 +69,7 @@ Minimum (single account):
 }
 ```
 
-Multi‑account:
+Multi-account:
 ```json5
 {
   channels: {
@@ -106,7 +120,7 @@ See: https://docs.openclaw.ai/automation/gmail-pubsub
 
 ## Security Notes
 - **Allowlist is strongly recommended** (`dmPolicy: "allowlist"`).
-- `credentialsPath` points at a service account JSON (protect it, don’t commit it).
+- `credentialsPath` points at a service account JSON (protect it, don't commit it).
 - State files store Gmail message IDs and last history ID (no email bodies).
 - gog manages its own OAuth credentials; treat your local gog cache as sensitive.
 

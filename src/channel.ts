@@ -17,8 +17,10 @@ import { promisify } from "node:util";
 import { GoogleAuth } from "google-auth-library";
 
 import { getGmailRuntime } from "./runtime.js";
-import { gogJson } from "./gog.js";
-import { extractBody, headerValue, parseEmailAddress } from "./utils.js";
+// gws adapter: drop-in replacement for gogJson using Google Workspace CLI (gws)
+// instead of gogcli (gog). See gws.ts for translation layer.
+import { gogJsonCompat as gogJson } from "./gws.js";
+import { extractBody, extractAttachments, headerValue, parseEmailAddress } from "./utils.js";
 // (schema inlined in channel.ts)
 import {
   listGmailAccountIds,
@@ -214,6 +216,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       const looksLikeThreadId = /^[0-9a-f]{10,}$/i.test(threadId);
       if (looksLikeThreadId) {
         let replySubject = "(no subject)";
+        let replyTo = "";
         try {
           const thread = await gogJson(["gmail", "thread", "get", threadId, "--json"], {
             account: account.config.gogAccount,
@@ -226,6 +229,12 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           if (subject) {
             replySubject = subject.toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
           }
+          // Extract sender address for --to (needed by gws raw send)
+          const rawFrom = headers.find((h: any) => String(h?.name ?? "").toLowerCase() === "from")?.value;
+          if (rawFrom) {
+            const match = String(rawFrom).match(/<([^>]+)>/) ?? [null, String(rawFrom).trim()];
+            replyTo = String(match[1] ?? "").trim();
+          }
         } catch {
           // fall back to (no subject)
         }
@@ -234,6 +243,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           [
             "gmail",
             "send",
+            ...(replyTo ? ["--to", replyTo] : []),
             "--thread-id",
             threadId,
             "--reply-all",
@@ -439,10 +449,13 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           const threadId = String(gmsg?.threadId ?? "").trim();
           if (!threadId) continue;
 
-          const headers = gmsg?.payload?.headers;
-          const from = headerValue(headers, "From");
-          const subject = headerValue(headers, "Subject");
-          const date = headerValue(headers, "Date");
+          // Check simplified format first (top-level headers object), then fall back to nested Gmail API format
+          const topLevelHeaders = (msg as any)?.headers;
+          const nestedHeaders = gmsg?.payload?.headers;
+          
+          const from = topLevelHeaders?.from || headerValue(nestedHeaders, "From");
+          const subject = topLevelHeaders?.subject || headerValue(nestedHeaders, "Subject");
+          const date = topLevelHeaders?.date || headerValue(nestedHeaders, "Date");
           const senderId = parseEmailAddress(from);
 
           // Skip self-sent messages.
@@ -488,7 +501,26 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
           const snippet = String(gmsg?.snippet ?? "").trim();
           const body = extractBody(gmsg?.payload);
-          let bodyText = (body || snippet).trim();
+          let bodyText = body.trim();
+          
+          // Log debugging info to help diagnose context issues
+          ctx.log?.info(`[${account.accountId}] gmail processing messageId=${messageId} threadId=${threadId} bodyLength=${bodyText.length} snippetLength=${snippet.length}`);
+          
+          // If we couldn't extract body, fall back to snippet first.
+          if (!bodyText && snippet) {
+            bodyText = snippet;
+            ctx.log?.warn(`[${account.accountId}] gmail falling back to snippet for messageId=${messageId} (body extraction failed)`);
+          }
+
+          // Subject-only emails are a real use case (commands/instructions in subject line).
+          // If both body and snippet are empty, promote subject to message body so the agent can respond.
+          if (!bodyText && subject) {
+            bodyText = String(subject).trim();
+            ctx.log?.warn(`[${account.accountId}] gmail using subject as body for messageId=${messageId} (subject-only email)`);
+          }
+          
+          // Extract attachment metadata
+          const attachments = extractAttachments(gmsg?.payload);
 
           // Best-practice reply extraction: use email-reply-parser when available.
           // We intentionally keep this optional to avoid hard dependency/runtime surprises.
@@ -506,22 +538,103 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             // ignore; fall back to raw bodyText
           }
 
-          const text = [
-            `From: ${from}`,
-            subject ? `Subject: ${subject}` : null,
-            date ? `Date: ${date}` : null,
-            "",
-            bodyText,
-          ]
-            .filter(Boolean)
-            .join("\n");
-
+          // Build text with attachment info if present
+          const attachmentInfo = attachments.length > 0 
+            ? `\nAttachments (${attachments.length}): ${attachments.map(a => `${a.filename} (${a.mime_type}, ${a.size} bytes)`).join(', ')}` 
+            : '';
+          
           // Forward to OpenClaw inbound pipeline via plugin runtime's dispatcher helper.
           const pluginRuntime = getGmailRuntime() as any;
 
           const sessionKey = `agent:main:gmail:dm:${threadId}`;
 
           const cfg = pluginRuntime.config.loadConfig();
+          
+          // Include bounded recent thread context so replies have conversational memory.
+          let conversationHistory = `[message_id: ${messageId}]`;
+          try {
+            const thread = await gogJson(["gmail", "thread", "get", threadId], {
+              account: account.config.gogAccount,
+            });
+
+            const rawMessages = Array.isArray((thread as any)?.messages)
+              ? (thread as any).messages
+              : Array.isArray((thread as any)?.thread?.messages)
+                ? (thread as any).thread.messages
+                : [];
+
+            const priorMessages = rawMessages
+              .filter((m: any) => String(m?.id ?? "").trim() && String(m?.id ?? "") !== messageId)
+              .sort((a: any, b: any) => {
+                const ta = Number(a?.internalDate ?? 0);
+                const tb = Number(b?.internalDate ?? 0);
+                return ta - tb;
+              })
+              .slice(-6)
+              .reverse();
+
+            if (priorMessages.length > 0) {
+              const items = priorMessages.map((m: any, idx: number) => {
+                const topHeaders = m?.headers ?? {};
+                const nestedHeaders = m?.payload?.headers;
+                const h = (name: string) =>
+                  topHeaders?.[name.toLowerCase()] ||
+                  topHeaders?.[name] ||
+                  headerValue(nestedHeaders, name) ||
+                  "";
+
+                const hFrom = String(h("From") || "").trim();
+                const hSubject = String(h("Subject") || "").trim();
+                const hDate = String(h("Date") || "").trim();
+                const bodyCandidate = String(extractBody(m?.payload) || m?.snippet || "")
+                  .trim()
+                  .slice(0, 5000);
+
+                const parts = [
+                  `(${idx + 1}) ${hFrom || "(unknown sender)"}`,
+                  hSubject ? `Subject: ${hSubject}` : null,
+                  hDate ? `Date: ${hDate}` : null,
+                  bodyCandidate ? `Body: ${bodyCandidate}` : null,
+                ].filter(Boolean);
+
+                return `- ${parts.join(" | ")}`;
+              });
+
+              conversationHistory = [
+                `[message_id: ${messageId}]`,
+                "Recent thread context (most recent first):",
+                ...items,
+              ].join("\n");
+            }
+          } catch (e) {
+            ctx.log?.warn(
+              `[${account.accountId}] gmail failed to fetch thread context for threadId=${threadId}: ${(e as Error)?.message ?? String(e)}`
+            );
+          }
+
+          // Always prepend subject to the top of body so story/intent survives Gmail threading behavior.
+          if (subject) {
+            const subjectLine = String(subject).trim();
+            if (subjectLine) {
+              const alreadyStartsWithSubject = bodyText.trimStart().toLowerCase().startsWith(subjectLine.toLowerCase());
+              if (!alreadyStartsWithSubject) {
+                bodyText = bodyText ? `${subjectLine}\n\n${bodyText}` : subjectLine;
+                ctx.log?.info(`[${account.accountId}] gmail prepended subject to body for messageId=${messageId}`);
+              }
+            }
+          }
+
+          const text = [
+            `From: ${from}`,
+            subject ? `Subject: ${subject}` : null,
+            date ? `Date: ${date}` : null,
+            conversationHistory, // Include recent conversation context
+            "",
+            bodyText,
+            attachmentInfo,
+          ]
+            .filter(Boolean)
+            .join("\n");
 
           const inboundCtx = {
             Body: text,
@@ -540,6 +653,17 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             OriginatingTo: `thread:${threadId}`,
             MessageSid: messageId,
             MessageThreadId: threadId,
+            // Add attachment metadata following OpenClaw standard pattern
+            ...(attachments.length > 0 && { 
+              Attachments: attachments.map(att => ({
+                filename: att.filename,
+                mime_type: att.mime_type,
+                attachment_id: att.attachment_id,
+                size: att.size,
+                // Note: no local 'path' since Gmail attachments need to be downloaded via gogcli
+                // The attachment_id can be used with: gog gmail attachment <messageId> <attachmentId>
+              }))
+            }),
           };
 
           // Persist session metadata so it appears in Control UI Sessions list.
@@ -575,6 +699,27 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
               deliver: async (payload: any) => {
                 const outText = String(payload?.text ?? "").trim();
                 if (!outText) return;
+
+                // Deduplicate accidental double-deliveries (seen in some runs as "double replies").
+                // If the same exact content is emitted twice for the same thread within a short window,
+                // suppress the second send.
+                try {
+                  const crypto = await import("node:crypto");
+                  const key = threadId;
+                  const hash = crypto.createHash("sha256").update(outText, "utf8").digest("hex");
+                  const now = Date.now();
+                  (globalThis as any).__openclaw_gmail_lastSend = (globalThis as any).__openclaw_gmail_lastSend || new Map();
+                  const m: Map<string, { hash: string; ts: number }> = (globalThis as any).__openclaw_gmail_lastSend;
+                  const prev = m.get(key);
+                  if (prev && prev.hash === hash && now - prev.ts < 2 * 60 * 1000) {
+                    ctx.log?.warn(`[${account.accountId}] gmail dedupe: suppressing duplicate send for thread=${threadId}`);
+                    return;
+                  }
+                  m.set(key, { hash, ts: now });
+                } catch {
+                  // ignore; proceed
+                }
+
                 const replySubject = subject
                   ? subject.toLowerCase().startsWith("re:")
                     ? subject
@@ -584,6 +729,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
                   [
                     "gmail",
                     "send",
+                    ...(senderId ? ["--to", senderId] : []),
                     "--thread-id",
                     threadId,
                     "--reply-all",
@@ -615,6 +761,16 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         ? Number(pushCfg.pollFallbackSec)
         : 60;
       const pollIntervalMs = Math.max(5, Number(account.config.pollIntervalSec ?? (pushEnabled ? pollFallbackSec : 20))) * 1000;
+      // Mark running for Control UI / channels status (core does not infer this automatically).
+      ctx.setStatus({
+        accountId: account.accountId,
+        configured: account.configured,
+        running: true,
+        lastStartAt: Date.now(),
+        lastStopAt: null,
+        lastError: null,
+      });
+
       ctx.log?.info(
         `[${account.accountId}] gmail provider started (poll ${Math.round(pollIntervalMs / 1000)}s; inbound+outbound; state=${statePath}; push=${pushEnabled ? "on" : "off"})`
       );
@@ -632,8 +788,12 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         try {
           await pollOnce();
         } catch (e) {
-          ctx.setStatus({ accountId: account.accountId, lastError: (e as Error)?.message ?? String(e) });
-          ctx.log?.error(`[${account.accountId}] gmail poll error: ${(e as Error)?.message ?? String(e)}`);
+          const errMsg = (e as Error)?.message ?? String(e);
+          const errStack = (e as Error)?.stack ?? "";
+          ctx.setStatus({ accountId: account.accountId, lastError: errMsg });
+          ctx.log?.error(`[${account.accountId}] gmail poll error: ${errMsg}`);
+          // Last-resort error logging (always visible in stderr)
+          console.error(`[openclaw-gmail][POLL_ERROR] ${errMsg}\n${errStack}`);
         } finally {
           running = false;
         }
@@ -738,13 +898,29 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       timer = setInterval(() => void tick(), pollIntervalMs);
       setTimeout(() => void tick(), 250);
 
-      return {
-        stop: () => {
+      // The OpenClaw channel framework expects startAccount to return a Promise
+      // that stays pending for the channel's lifetime. If the Promise resolves,
+      // the framework treats it as "channel exited" and triggers auto-restart.
+      // We return a Promise that only resolves when the abort signal fires.
+      return new Promise<void>((resolve) => {
+        const onAbort = () => {
           if (timer) clearInterval(timer);
           if (watchTimer) clearInterval(watchTimer);
+          ctx.setStatus({
+            accountId: account.accountId,
+            running: false,
+            lastStopAt: Date.now(),
+          });
           ctx.log?.info(`[${account.accountId}] gmail provider stopped`);
-        },
-      };
+          resolve();
+        };
+
+        if (ctx.abortSignal.aborted) {
+          onAbort();
+        } else {
+          ctx.abortSignal.addEventListener("abort", onAbort, { once: true });
+        }
+      });
     },
   },
 };

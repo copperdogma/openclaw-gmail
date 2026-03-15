@@ -2,7 +2,7 @@
   "name": "openclaw-gmail",
   "version": "0.1.0",
   "type": "module",
-  "description": "OpenClaw Gmail channel plugin (gog) \u2014 per-thread sessions with Pub/Sub push",
+  "description": "OpenClaw Gmail channel plugin (gws) — per-thread sessions with Pub/Sub push",
   "dependencies": {
     "email-reply-parser": "^2.3.5",
     "google-auth-library": "^9.15.0"
@@ -20,7 +20,7 @@
     "email",
     "channel",
     "plugin",
-    "gog"
+    "gws"
   ],
   "files": [
     "index.ts",
@@ -34,9 +34,10 @@
     "openclaw": ">=2026.1.0"
   },
   "devDependencies": {
+    "jiti": "^1.21.0",
     "openclaw": ">=2026.1.0",
-    "typescript": "^5.5.4",
-    "jiti": "^1.21.0"
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.4"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -49,10 +50,10 @@
     "channel": {
       "id": "openclaw-gmail",
       "label": "Gmail",
-      "selectionLabel": "Gmail (gog)",
+      "selectionLabel": "Gmail (gws)",
       "docsPath": "/channels/gmail",
       "docsLabel": "gmail",
-      "blurb": "Gmail channel (gog) \u2014 per-thread sessions.",
+      "blurb": "Gmail channel (gws) — per-thread sessions.",
       "order": 92,
       "quickstartAllowFrom": true,
       "npmSpec": "openclaw-gmail",

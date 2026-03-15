@@ -17,9 +17,9 @@ import { promisify } from "node:util";
 import { GoogleAuth } from "google-auth-library";
 
 import { getGmailRuntime } from "./runtime.js";
-// gws adapter: drop-in replacement for gogJson using Google Workspace CLI (gws)
-// instead of gogcli (gog). See gws.ts for translation layer.
-import { gogJsonCompat as gogJson } from "./gws.js";
+// gws adapter for Google Workspace CLI (gws).
+// See gws.ts for the translation/normalization layer used by this channel.
+import { gwsJsonCompat as gmailJson } from "./gws.js";
 import { extractBody, extractAttachments, headerValue, parseEmailAddress } from "./utils.js";
 // (schema inlined in channel.ts)
 import {
@@ -34,12 +34,12 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   meta: {
     id: "openclaw-gmail",
     label: "Gmail",
-    detailLabel: "Gmail (gog)",
-    selectionLabel: "Gmail (gog)",
+    detailLabel: "Gmail (gws)",
+    selectionLabel: "Gmail (gws)",
     systemImage: "envelope",
     docsPath: "/channels/openclaw-gmail",
     docsLabel: "openclaw-gmail",
-    blurb: "Gmail channel (gog) — per-thread sessions.",
+    blurb: "Gmail channel (gws) — per-thread sessions.",
     order: 91,
   },
   capabilities: {
@@ -57,7 +57,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       properties: {
         enabled: { type: "boolean" },
         name: { type: "string" },
-        gogAccount: { type: "string" },
+        gmailAccount: { type: "string" },
         pollIntervalSec: { type: "number" },
         dmPolicy: { enum: ["allowlist", "pairing", "open"] },
         allowFrom: { type: "array", items: { type: "string" } },
@@ -82,7 +82,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             properties: {
               enabled: { type: "boolean" },
               name: { type: "string" },
-              gogAccount: { type: "string" },
+              gmailAccount: { type: "string" },
               pollIntervalSec: { type: "number" },
               dmPolicy: { enum: ["allowlist", "pairing", "open"] },
               allowFrom: { type: "array", items: { type: "string" } },
@@ -125,7 +125,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         cfg,
         sectionKey: "openclaw-gmail",
         accountId,
-        clearBaseFields: ["gogAccount", "pollIntervalSec", "allowFrom", "dmPolicy", "name"],
+        clearBaseFields: ["gmailAccount", "pollIntervalSec", "allowFrom", "dmPolicy", "name"],
       }),
 
     isEnabled: (account) => account.enabled !== false,
@@ -139,7 +139,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      gogAccount: account.config.gogAccount,
+      gmailAccount: account.config.gmailAccount,
       pollIntervalSec: account.config.pollIntervalSec,
     }),
 
@@ -202,7 +202,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       const account = resolveGmailAccount({ cfg, accountId: aid });
       if (!account.configured) {
         throw new Error(
-          `Gmail account ${aid} not configured (missing channels.openclaw-gmail.accounts.${aid}.gogAccount)`
+          `Gmail account ${aid} not configured (missing channels.openclaw-gmail.accounts.${aid}.gmailAccount)`
         );
       }
 
@@ -217,9 +217,11 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       if (looksLikeThreadId) {
         let replySubject = "(no subject)";
         let replyTo = "";
+        let inReplyTo = "";
+        let references = "";
         try {
-          const thread = await gogJson(["gmail", "thread", "get", threadId, "--json"], {
-            account: account.config.gogAccount,
+          const thread = await gmailJson(["gmail", "thread", "get", threadId, "--json"], {
+            account: account.config.gmailAccount,
           });
           const messages = (thread as any)?.messages ?? (thread as any)?.thread?.messages ?? [];
           const pick = messages?.[0] ?? messages?.[messages.length - 1];
@@ -235,11 +237,28 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             const match = String(rawFrom).match(/<([^>]+)>/) ?? [null, String(rawFrom).trim()];
             replyTo = String(match[1] ?? "").trim();
           }
+          // Extract Message-ID from the LAST message for In-Reply-To/References threading headers.
+          // Email clients (including Gmail web UI) use these to visually group threads.
+          const lastMsg = messages?.[messages.length - 1];
+          const lastHeaders = lastMsg?.payload?.headers ?? [];
+          const lastMsgId = lastHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
+          if (lastMsgId) {
+            inReplyTo = String(lastMsgId).trim();
+            // Build References chain: collect all Message-IDs in the thread
+            const allMsgIds = messages
+              .map((m: any) => {
+                const mh = m?.payload?.headers ?? [];
+                return mh.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
+              })
+              .filter(Boolean)
+              .map((v: string) => String(v).trim());
+            references = allMsgIds.join(" ");
+          }
         } catch {
           // fall back to (no subject)
         }
 
-        await gogJson(
+        await gmailJson(
           [
             "gmail",
             "send",
@@ -249,18 +268,20 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             "--reply-all",
             "--subject",
             replySubject,
+            ...(inReplyTo ? ["--in-reply-to", inReplyTo] : []),
+            ...(references ? ["--references", references] : []),
             "--body",
             body,
             "--no-input",
             "--force",
           ],
-          { account: account.config.gogAccount }
+          { account: account.config.gmailAccount }
         );
         return { channel: "openclaw-gmail", to: `thread:${threadId}` };
       }
 
       // Mode B: start a new thread (treat `to` as email address)
-      await gogJson(
+      await gmailJson(
         [
           "gmail",
           "send",
@@ -273,7 +294,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           "--no-input",
           "--force",
         ],
-        { account: account.config.gogAccount }
+        { account: account.config.gmailAccount }
       );
 
       return { channel: "openclaw-gmail", to: normalizedTarget };
@@ -313,7 +334,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      gogAccount: account.config.gogAccount,
+      gmailAccount: account.config.gmailAccount,
       running: runtime?.running ?? false,
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
@@ -334,7 +355,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       }
 
       if (!account.configured) {
-        throw new Error("Gmail account not configured (missing gogAccount)");
+        throw new Error("Gmail account not configured (missing gmailAccount)");
       }
 
       // Profile-scoped state dir (e.g. ~/.openclaw/state)
@@ -383,8 +404,8 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         if (st.lastHistoryId) return st.lastHistoryId;
 
         // Initialize cursor “near now” to avoid backfilling the mailbox.
-        const init = await gogJson(["gmail", "history", "--since", "1", "--max", "1"], {
-          account: account.config.gogAccount,
+        const init = await gmailJson(["gmail", "history", "--since", "1", "--max", "1"], {
+          account: account.config.gmailAccount,
         });
         const hid = String(init?.historyId ?? "").trim();
         if (!hid) throw new Error("gmail: failed to initialize history cursor (missing historyId)");
@@ -404,8 +425,8 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
         const archiveBase = path.join(stateBase, "gmail-archive", "blocked", account.accountId);
 
-        const hist = await gogJson(["gmail", "history", "--since", since, "--max", "50"], {
-          account: account.config.gogAccount,
+        const hist = await gmailJson(["gmail", "history", "--since", since, "--max", "50"], {
+          account: account.config.gmailAccount,
         });
 
         const newHistoryId = String(hist?.historyId ?? "").trim();
@@ -427,7 +448,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
           seen.add(messageId);
 
-          const msg = await gogJson(
+          const msg = await gmailJson(
             [
               "gmail",
               "get",
@@ -439,10 +460,10 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
               "--headers",
               "From,To,Cc,Subject,Date",
             ],
-            { account: account.config.gogAccount }
+            { account: account.config.gmailAccount }
           );
 
-          // `gog gmail get --json` returns `{ message: { threadId, payload, snippet, ... }, headers: {...} }`.
+          // Historical wrapper note: older compatibility layers returned `{ message: { threadId, payload, snippet, ... }, headers: {...} }`.
           const gmsg = (msg as any)?.message ?? msg;
 
 
@@ -458,8 +479,14 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           const date = topLevelHeaders?.date || headerValue(nestedHeaders, "Date");
           const senderId = parseEmailAddress(from);
 
+          // Extract Message-ID for threading headers (In-Reply-To / References).
+          // This is the inbound message's Message-ID — when we reply, we reference it.
+          const inboundMessageId = String(
+            topLevelHeaders?.["message-id"] || headerValue(nestedHeaders, "Message-ID") || ""
+          ).trim();
+
           // Skip self-sent messages.
-          const self = String(account.config.gogAccount ?? "").trim().toLowerCase();
+          const self = String(account.config.gmailAccount ?? "").trim().toLowerCase();
           if (senderId && self && senderId === self) continue;
 
           // Enforce dmPolicy allowlist locally (defense-in-depth).
@@ -551,10 +578,12 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           const cfg = pluginRuntime.config.loadConfig();
           
           // Include bounded recent thread context so replies have conversational memory.
+          // Also build References chain for RFC 2822 threading headers.
           let conversationHistory = `[message_id: ${messageId}]`;
+          let threadReferencesChain = "";  // Space-separated Message-IDs for References header
           try {
-            const thread = await gogJson(["gmail", "thread", "get", threadId], {
-              account: account.config.gogAccount,
+            const thread = await gmailJson(["gmail", "thread", "get", threadId], {
+              account: account.config.gmailAccount,
             });
 
             const rawMessages = Array.isArray((thread as any)?.messages)
@@ -562,6 +591,18 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
               : Array.isArray((thread as any)?.thread?.messages)
                 ? (thread as any).thread.messages
                 : [];
+
+            // Build References chain from all messages in the thread (for email threading headers)
+            const allThreadMsgIds = rawMessages
+              .map((m: any) => {
+                const mHeaders = m?.payload?.headers ?? [];
+                const val = mHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
+                return val ? String(val).trim() : null;
+              })
+              .filter(Boolean) as string[];
+            if (allThreadMsgIds.length > 0) {
+              threadReferencesChain = allThreadMsgIds.join(" ");
+            }
 
             const priorMessages = rawMessages
               .filter((m: any) => String(m?.id ?? "").trim() && String(m?.id ?? "") !== messageId)
@@ -639,7 +680,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           const inboundCtx = {
             Body: text,
             RawBody: bodyText,
-            CommandBody: bodyText,
+            CommandBody: text,
             From: `gmail:${senderId}`,
             To: `thread:${threadId}`,
             SessionKey: sessionKey,
@@ -660,8 +701,8 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
                 mime_type: att.mime_type,
                 attachment_id: att.attachment_id,
                 size: att.size,
-                // Note: no local 'path' since Gmail attachments need to be downloaded via gogcli
-                // The attachment_id can be used with: gog gmail attachment <messageId> <attachmentId>
+                // Note: no local `path` here; attachment download should use the active Gmail API/gws path when implemented
+                // Attachment metadata is exposed here; any future download helper should use the active Gmail API/gws path.
               }))
             }),
           };
@@ -725,7 +766,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
                     ? subject
                     : `Re: ${subject}`
                   : "(no subject)";
-                await gogJson(
+                await gmailJson(
                   [
                     "gmail",
                     "send",
@@ -735,10 +776,14 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
                     "--reply-all",
                     "--subject",
                     replySubject,
+                    // Threading headers: In-Reply-To references the inbound message;
+                    // References includes the full chain so email clients thread correctly.
+                    ...(inboundMessageId ? ["--in-reply-to", inboundMessageId] : []),
+                    ...(threadReferencesChain ? ["--references", threadReferencesChain] : []),
                     "--body",
                     outText,
                   ],
-                  { account: account.config.gogAccount }
+                  { account: account.config.gmailAccount }
                 );
               },
               onError: (err: any, info: any) => {
@@ -923,4 +968,19 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       });
     },
   },
+};
+,
+  },
+};
+     }
+      });
+    },
+  },
+};
+,
+  },
+};
+},
+};
+},
 };

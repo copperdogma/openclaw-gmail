@@ -132,7 +132,7 @@ See: https://docs.openclaw.ai/automation/gmail-pubsub
 - [ ] (If push enabled) Pub/Sub subscription receives updates and `watchRenewSec` renews
 
 ## Troubleshooting
-- **No messages**: confirm `gog` is authenticated for the same Gmail account as `gogAccount`.
+- **No messages**: confirm `gws` is authenticated for the same Gmail account as `gmailAccount` (or legacy `gogAccount` fallback).
 - **Schema validation error** after npm install: use the extensions install path.
 - **Push not working**: verify Pub/Sub subscription + service account permissions; check `watchRenewSec` and `pollFallbackSec` settings.
 

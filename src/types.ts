@@ -3,10 +3,12 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 // Config type - use any since the exact type may vary between versions
 type OpenClawConfig = any;
 
+let _didConfigDebug = false;
+
 export type GmailAccountConfig = {
   enabled?: boolean;
-  /** Gmail address gog is authorized for. */
-  gogAccount?: string;
+  /** Gmail address this channel is authorized for. */
+  gmailAccount?: string;
   /** Polling interval (seconds). */
   pollIntervalSec?: number;
   /** Optional: restrict inbound to specific senders. */
@@ -34,7 +36,12 @@ export type ResolvedGmailAccount = {
 };
 
 export function listGmailAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = (cfg.channels?.gmail as any)?.accounts;
+  // Core may pass either:
+  // - the full OpenClaw config (cfg.channels["openclaw-gmail"])
+  // - the channels map (cfg["openclaw-gmail"])
+  // - the channel section itself (cfg)
+  const base = (cfg?.channels?.["openclaw-gmail"] as any) ?? (cfg as any)?.["openclaw-gmail"] ?? (cfg as any) ?? {};
+  const accounts = (base as any)?.accounts;
   if (accounts && typeof accounts === "object") return Object.keys(accounts);
   return [DEFAULT_ACCOUNT_ID];
 }
@@ -51,11 +58,38 @@ export function resolveGmailAccount({
   accountId?: string;
 }): ResolvedGmailAccount {
   const aid = normalizeAccountId(accountId ?? DEFAULT_ACCOUNT_ID);
-  const base = (cfg.channels?.gmail as any) ?? {};
-  const acct = (base.accounts?.[aid] ?? {}) as any;
+
+  // Core may pass different shapes depending on version:
+  // - full config: { channels: { "openclaw-gmail": { accounts: { ... }}}}
+  // - channels map: { "openclaw-gmail": { accounts: { ... }}}
+  // - channel section: { accounts: { ... }}
+  // - account section: { gmailAccount: "...", ... }
+  const base0 = (cfg?.channels?.["openclaw-gmail"] as any) ?? (cfg as any)?.["openclaw-gmail"] ?? (cfg as any) ?? {};
+
+  let base: any = base0;
+  let acct: any = (base0?.accounts?.[aid] ?? {}) as any;
+
+  // If we were handed the account section directly, it won't have .accounts.
+  if (!base0?.accounts && (base0?.gmailAccount || base0?.pollIntervalSec || base0?.push)) {
+    base = {};
+    acct = base0;
+  }
 
   const enabled = Boolean(acct.enabled ?? base.enabled ?? true);
-  const gogAccount = String(acct.gogAccount ?? base.gogAccount ?? "").trim();
+  const gmailAccount = String(acct.gmailAccount ?? base.gmailAccount ?? "").trim();
+
+  if (!_didConfigDebug) {
+    _didConfigDebug = true;
+    try {
+      const keys = (x: any) => (x && typeof x === "object" ? Object.keys(x) : []);
+      console.error(
+        `[openclaw-gmail][debug] resolveGmailAccount cfgKeys=${keys(cfg)} baseKeys=${keys(base)} acctKeys=${keys(acct)} gmailAccountPresent=${!!gmailAccount}`
+      );
+    } catch (e) {
+      console.error(`[openclaw-gmail][debug] config debug failed: ${String((e as any)?.message ?? e)}`);
+    }
+  }
+
   const pollIntervalSec = Number.isFinite(acct.pollIntervalSec)
     ? Number(acct.pollIntervalSec)
     : Number.isFinite(base.pollIntervalSec)
@@ -75,7 +109,7 @@ export function resolveGmailAccount({
 
   const push = (acct.push ?? base.push ?? undefined) as any;
 
-  const configured = Boolean(gogAccount);
+  const configured = Boolean(gmailAccount);
 
   return {
     accountId: aid,
@@ -84,7 +118,7 @@ export function resolveGmailAccount({
     configured,
     config: {
       enabled,
-      gogAccount,
+      gmailAccount,
       pollIntervalSec,
       allowFrom,
       dmPolicy,

@@ -6,7 +6,7 @@ import { setGmailRuntime } from "./src/runtime.js";
 const plugin = {
   id: "openclaw-gmail",
   name: "Gmail",
-  description: "OpenClaw Gmail channel plugin (gog) — per-thread sessions",
+  description: "OpenClaw Gmail channel plugin (gws) — per-thread sessions",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setGmailRuntime(api.runtime);

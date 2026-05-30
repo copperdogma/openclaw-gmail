@@ -3,6 +3,68 @@
   "channels": [
     "openclaw-gmail"
   ],
+  "channelConfigs": {
+    "openclaw-gmail": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "name": { "type": "string" },
+          "gmailAccount": { "type": "string" },
+          "pollIntervalSec": { "type": "number" },
+          "dmPolicy": { "enum": ["allowlist", "pairing", "open", "disabled"] },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "groupPolicy": { "enum": ["allowlist", "open", "disabled"] },
+          "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+          "push": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "projectId": { "type": "string" },
+              "subscription": { "type": "string" },
+              "credentialsPath": { "type": "string" },
+              "pollFallbackSec": { "type": "number" },
+              "watchCommand": { "type": "string" },
+              "watchRenewSec": { "type": "number" }
+            }
+          },
+          "blockStreaming": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "name": { "type": "string" },
+                "gmailAccount": { "type": "string" },
+                "pollIntervalSec": { "type": "number" },
+                "dmPolicy": { "enum": ["allowlist", "pairing", "open", "disabled"] },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "groupPolicy": { "enum": ["allowlist", "open", "disabled"] },
+                "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+                "push": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "projectId": { "type": "string" },
+                    "subscription": { "type": "string" },
+                    "credentialsPath": { "type": "string" },
+                    "pollFallbackSec": { "type": "number" },
+                    "watchCommand": { "type": "string" },
+                    "watchRenewSec": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

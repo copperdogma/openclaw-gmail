@@ -312,13 +312,21 @@ export function translateGogToGws(
         }
       };
 
+      const looksMojibake = (s: string): boolean => /Ã.|Â.|â.|ðŸ|�/.test(s);
+
       const repairSubject = (s: string): string => {
+        // Critical: do NOT "repair" healthy Unicode subjects.
+        // Over-eager latin1->utf8 passes can mutate valid punctuation (e.g. em dash)
+        // and break Gmail threading's "matching Subject" requirement.
         let cur = String(s ?? "").trim();
         if (!cur) return cur;
+        if (!looksMojibake(cur)) return cur;
+
         for (let i = 0; i < 3; i++) {
           const next = decodeMojibakeOnce(cur).trim();
           if (!next || next === cur) break;
           cur = next;
+          if (!looksMojibake(cur)) break;
         }
         return cur;
       };
@@ -480,3 +488,7 @@ function normalizeMessageResponse(gwsResult: any): any {
     headers,
   };
 }
+
+
+// Backward-compatible alias used by channel.ts during the gws cutover.
+export const gwsJsonCompat = gogJsonCompat;

@@ -62,3 +62,38 @@ export function extractBody(payload: any): string {
   }
   return html ? stripHtml(html) : "";
 }
+
+export function extractAttachments(payload: any): Array<{filename: string, mime_type: string, attachment_id: string, size: number}> {
+  const attachments: Array<{filename: string, mime_type: string, attachment_id: string, size: number}> = [];
+  
+  function traverseParts(parts: any[] | undefined) {
+    if (!Array.isArray(parts)) return;
+    
+    for (const part of parts) {
+      const filename = String(part?.filename ?? "").trim();
+      const mimeType = String(part?.mimeType ?? "").trim();
+      const attachmentId = String(part?.body?.attachmentId ?? "").trim();
+      const size = Number(part?.body?.size ?? 0);
+      
+      // If this part has a filename and attachmentId, it's an attachment
+      if (filename && attachmentId && size > 0) {
+        attachments.push({
+          filename,
+          mime_type: mimeType,
+          attachment_id: attachmentId,
+          size
+        });
+      }
+      
+      // Recursively check nested parts (multipart structures)
+      if (Array.isArray(part?.parts)) {
+        traverseParts(part.parts);
+      }
+    }
+  }
+  
+  // Start traversal from top-level parts
+  traverseParts(payload?.parts);
+  
+  return attachments;
+}

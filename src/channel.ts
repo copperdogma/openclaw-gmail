@@ -7,19 +7,17 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { exec as cpExec } from "node:child_process";
 import { promisify } from "node:util";
-import { GoogleAuth } from "google-auth-library";
-
 import { getGmailRuntime } from "./runtime.js";
 // gws adapter for Google Workspace CLI (gws).
 // See gws.ts for the translation/normalization layer used by this channel.
-import { gwsJsonCompat as gmailJson } from "./gws.js";
+import { gwsJsonCompat as gmailJson, gwsJson } from "./gws.js";
 import { extractBody, extractAttachments, headerValue, parseEmailAddress } from "./utils.js";
 // (schema inlined in channel.ts)
 import {
@@ -108,7 +106,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
   config: {
     listAccountIds: (cfg) => listGmailAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveGmailAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) => resolveGmailAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }),
     defaultAccountId: (cfg) => resolveDefaultGmailAccountId(cfg),
 
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
@@ -144,7 +142,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
     }),
 
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveGmailAccount({ cfg, accountId }).config.allowFrom ?? []).map((x) => String(x)),
+      (resolveGmailAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }).config.allowFrom ?? []).map((x) => String(x)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((x) => String(x).trim().toLowerCase())
@@ -155,9 +153,9 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId ?? DEFAULT_ACCOUNT_ID),
     applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({ cfg, sectionKey: "openclaw-gmail", accountId, name }),
+      applyAccountNameToChannelSection({ cfg, channelKey: "openclaw-gmail", accountId, name: name ?? undefined }),
     applyAccountConfig: ({ cfg, accountId }) =>
-      migrateBaseNameToDefaultAccount({ cfg, sectionKey: "openclaw-gmail", accountId }),
+      migrateBaseNameToDefaultAccount({ cfg, channelKey: "openclaw-gmail" }),
   },
 
   pairing: {
@@ -219,43 +217,48 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         let replyTo = "";
         let inReplyTo = "";
         let references = "";
-        try {
-          const thread = await gmailJson(["gmail", "thread", "get", threadId, "--json"], {
-            account: account.config.gmailAccount,
-          });
-          const messages = (thread as any)?.messages ?? (thread as any)?.thread?.messages ?? [];
-          const pick = messages?.[0] ?? messages?.[messages.length - 1];
-          const headers = pick?.payload?.headers ?? [];
-          const rawSubject = headers.find((h: any) => String(h?.name ?? "").toLowerCase() === "subject")?.value;
-          const subject = String(rawSubject ?? "").trim();
-          if (subject) {
-            replySubject = subject.toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
-          }
-          // Extract sender address for --to (needed by gws raw send)
-          const rawFrom = headers.find((h: any) => String(h?.name ?? "").toLowerCase() === "from")?.value;
-          if (rawFrom) {
-            const match = String(rawFrom).match(/<([^>]+)>/) ?? [null, String(rawFrom).trim()];
-            replyTo = String(match[1] ?? "").trim();
-          }
-          // Extract Message-ID from the LAST message for In-Reply-To/References threading headers.
-          // Email clients (including Gmail web UI) use these to visually group threads.
-          const lastMsg = messages?.[messages.length - 1];
-          const lastHeaders = lastMsg?.payload?.headers ?? [];
-          const lastMsgId = lastHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
-          if (lastMsgId) {
-            inReplyTo = String(lastMsgId).trim();
-            // Build References chain: collect all Message-IDs in the thread
-            const allMsgIds = messages
-              .map((m: any) => {
-                const mh = m?.payload?.headers ?? [];
-                return mh.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
-              })
-              .filter(Boolean)
-              .map((v: string) => String(v).trim());
-            references = allMsgIds.join(" ");
-          }
-        } catch {
-          // fall back to (no subject)
+
+        const thread = await gmailJson(["gmail", "thread", "get", threadId, "--json"], {
+          account: account.config.gmailAccount,
+        });
+        const messages = (thread as any)?.messages ?? (thread as any)?.thread?.messages ?? [];
+        if (!Array.isArray(messages) || messages.length === 0) {
+          throw new Error(`Cannot reply: thread ${threadId} has no messages`);
+        }
+
+        // Use the latest message in-thread as the canonical source for reply headers.
+        const lastMsg = messages[messages.length - 1];
+        const lastHeaders = lastMsg?.payload?.headers ?? [];
+
+        const rawSubject = lastHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "subject")?.value;
+        const subject = String(rawSubject ?? "").trim();
+        if (subject) {
+          replySubject = subject.toLowerCase().startsWith("re:") ? subject : `Re: ${subject}`;
+        }
+
+        // Extract sender address for --to (needed by gws raw send).
+        const rawFrom = lastHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "from")?.value;
+        if (rawFrom) {
+          const match = String(rawFrom).match(/<([^>]+)>/) ?? [null, String(rawFrom).trim()];
+          replyTo = String(match[1] ?? "").trim();
+        }
+        if (!replyTo) {
+          throw new Error(`Cannot reply: missing recipient address in thread ${threadId}`);
+        }
+
+        // Extract Message-ID from latest message for In-Reply-To/References threading headers.
+        const lastMsgId = lastHeaders.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
+        if (lastMsgId) {
+          inReplyTo = String(lastMsgId).trim();
+          // Build References chain: collect all Message-IDs in the thread.
+          const allMsgIds = messages
+            .map((m: any) => {
+              const mh = m?.payload?.headers ?? [];
+              return mh.find((h: any) => String(h?.name ?? "").toLowerCase() === "message-id")?.value;
+            })
+            .filter(Boolean)
+            .map((v: string) => String(v).trim());
+          references = allMsgIds.join(" ");
         }
 
         await gmailJson(
@@ -277,7 +280,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           ],
           { account: account.config.gmailAccount }
         );
-        return { channel: "openclaw-gmail", to: `thread:${threadId}` };
+        return { channel: "openclaw-gmail", to: `thread:${threadId}`, messageId: `thread:${threadId}` };
       }
 
       // Mode B: start a new thread (treat `to` as email address)
@@ -297,7 +300,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         { account: account.config.gmailAccount }
       );
 
-      return { channel: "openclaw-gmail", to: normalizedTarget };
+      return { channel: "openclaw-gmail", to: normalizedTarget, messageId: normalizedTarget };
     },
   },
 
@@ -399,6 +402,69 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
         return String(h?.value ?? "");
       }
 
+      async function hydrateImageAttachmentsToMediaPaths(params: {
+        messageId: string;
+        attachments: Array<{ filename: string; mime_type: string; attachment_id: string; size: number }>;
+      }): Promise<{ mediaPaths: string[]; mediaTypes: string[]; mediaNames: string[] }> {
+        const pluginRuntime = getGmailRuntime() as any;
+        const mediaPaths: string[] = [];
+        const mediaTypes: string[] = [];
+        const mediaNames: string[] = [];
+
+        const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+        const imageAttachments = params.attachments.filter((att) => {
+          const mt = String(att?.mime_type ?? "").toLowerCase();
+          const isImage = mt.startsWith("image/");
+          const sz = Number(att?.size ?? 0);
+          return isImage && !!att.attachment_id && sz > 0 && sz <= MAX_IMAGE_BYTES;
+        });
+
+        for (const att of imageAttachments) {
+          try {
+            const res = await gwsJson(
+              [
+                "gmail",
+                "users",
+                "messages",
+                "attachments",
+                "get",
+                "--params",
+                JSON.stringify({ userId: "me", messageId: params.messageId, id: att.attachment_id }),
+              ],
+              { env: undefined }
+            );
+
+            const rawData = String((res as any)?.data ?? "").trim();
+            if (!rawData) continue;
+
+            const normalized = rawData.replace(/-/g, "+").replace(/_/g, "/");
+            const pad = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+            const buffer = Buffer.from(normalized + pad, "base64");
+            if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) continue;
+
+            const saved = await pluginRuntime.channel.media.saveMediaBuffer(
+              buffer,
+              att.mime_type || undefined,
+              "gmail",
+              MAX_IMAGE_BYTES,
+              att.filename || undefined
+            );
+
+            if (saved?.path) {
+              mediaPaths.push(saved.path);
+              mediaTypes.push(att.mime_type || "");
+              mediaNames.push(att.filename || "image");
+            }
+          } catch (e) {
+            ctx.log?.warn(
+              `[${account.accountId}] gmail attachment hydrate failed messageId=${params.messageId} attachmentId=${att.attachment_id}: ${(e as Error)?.message ?? String(e)}`
+            );
+          }
+        }
+
+        return { mediaPaths, mediaTypes, mediaNames };
+      }
+
       async function ensureCursorInitialized(): Promise<string> {
         const st = await readState();
         if (st.lastHistoryId) return st.lastHistoryId;
@@ -425,12 +491,44 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
         const archiveBase = path.join(stateBase, "gmail-archive", "blocked", account.accountId);
 
-        const hist = await gmailJson(["gmail", "history", "--since", since, "--max", "50"], {
-          account: account.config.gmailAccount,
-        });
+        let newHistoryId = String(st.lastHistoryId ?? "").trim();
+        let messages: string[] = [];
+        let usedFallbackListPoll = false;
 
-        const newHistoryId = String(hist?.historyId ?? "").trim();
-        const messages: string[] = Array.isArray(hist?.messages) ? hist.messages.map(String) : [];
+        try {
+          const hist = await gmailJson(["gmail", "history", "--since", since, "--max", "50"], {
+            account: account.config.gmailAccount,
+          });
+          newHistoryId = String(hist?.historyId ?? "").trim();
+          messages = Array.isArray(hist?.messages) ? hist.messages.map(String) : [];
+        } catch (e) {
+          const errMsg = (e as Error)?.message ?? String(e);
+          if (!/insufficientPermissions/i.test(errMsg)) throw e;
+
+          usedFallbackListPoll = true;
+          ctx.log?.warn(
+            `[${account.accountId}] gmail history poll lacks scope; falling back to inbox list polling`
+          );
+
+          const inbox = await gmailJson(["gmail", "+triage", "--max", "20", "--query", "in:inbox"], {
+            account: account.config.gmailAccount,
+          });
+
+          const rows = Array.isArray(inbox)
+            ? inbox
+            : Array.isArray((inbox as any)?.messages)
+              ? (inbox as any).messages
+              : [];
+
+          messages = rows
+            .map((row: any) => String(row?.id ?? row?.messageId ?? "").trim())
+            .filter(Boolean);
+
+          if (!newHistoryId) {
+            newHistoryId = since;
+          }
+        }
+
         if (!newHistoryId) return;
 
         for (const messageId of messages) {
@@ -548,6 +646,15 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           
           // Extract attachment metadata
           const attachments = extractAttachments(gmsg?.payload);
+          const hydratedMedia = await hydrateImageAttachmentsToMediaPaths({
+            messageId,
+            attachments,
+          });
+          if (hydratedMedia.mediaPaths.length > 0) {
+            ctx.log?.info(
+              `[${account.accountId}] gmail hydrated ${hydratedMedia.mediaPaths.length} image attachment(s) for messageId=${messageId}`
+            );
+          }
 
           // Best-practice reply extraction: use email-reply-parser when available.
           // We intentionally keep this optional to avoid hard dependency/runtime surprises.
@@ -569,6 +676,9 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           const attachmentInfo = attachments.length > 0 
             ? `\nAttachments (${attachments.length}): ${attachments.map(a => `${a.filename} (${a.mime_type}, ${a.size} bytes)`).join(', ')}` 
             : '';
+          const hydratedInfo = hydratedMedia.mediaPaths.length > 0
+            ? `\nHydrated images for native vision (${hydratedMedia.mediaPaths.length}): ${hydratedMedia.mediaNames.join(", ")}`
+            : "";
           
           // Forward to OpenClaw inbound pipeline via plugin runtime's dispatcher helper.
           const pluginRuntime = getGmailRuntime() as any;
@@ -673,6 +783,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
             "",
             bodyText,
             attachmentInfo,
+            hydratedInfo,
           ]
             .filter(Boolean)
             .join("\n");
@@ -701,9 +812,13 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
                 mime_type: att.mime_type,
                 attachment_id: att.attachment_id,
                 size: att.size,
-                // Note: no local `path` here; attachment download should use the active Gmail API/gws path when implemented
-                // Attachment metadata is exposed here; any future download helper should use the active Gmail API/gws path.
               }))
+            }),
+            ...(hydratedMedia.mediaPaths.length > 0 && {
+              MediaPath: hydratedMedia.mediaPaths[0],
+              MediaPaths: hydratedMedia.mediaPaths,
+              MediaType: hydratedMedia.mediaTypes[0] || "image/jpeg",
+              MediaTypes: hydratedMedia.mediaTypes,
             }),
           };
 
@@ -797,7 +912,10 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
         // Persist cursor + bounded dedupe list
         const nextSeen = Array.from(seen).slice(-500);
-        await writeState({ lastHistoryId: newHistoryId, seenMessageIds: nextSeen });
+        await writeState({
+          lastHistoryId: usedFallbackListPoll ? since : newHistoryId,
+          seenMessageIds: nextSeen,
+        });
       }
 
       const pushCfg = (account.config as any)?.push ?? {};
@@ -855,10 +973,13 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
           return;
         }
 
-        const auth = new GoogleAuth({
-          scopes: ["https://www.googleapis.com/auth/pubsub"],
-          keyFile: credentialsPath,
-        });
+        const authHeader = async () => {
+          const { stdout } = await execAsync(
+            `gcloud auth application-default print-access-token --scopes=https://www.googleapis.com/auth/pubsub`,
+            { timeout: 60_000 }
+          );
+          return `Bearer ${stdout.trim()}`;
+        };
 
         const pullUrl = `https://pubsub.googleapis.com/v1/projects/${projectId}/subscriptions/${subscription}:pull`;
         const ackUrl = `https://pubsub.googleapis.com/v1/projects/${projectId}/subscriptions/${subscription}:acknowledge`;
@@ -889,11 +1010,11 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
 
         while (!ctx.abortSignal.aborted) {
           try {
-            const token = await auth.getAccessToken();
+            const authorization = await authHeader();
             const res = await fetch(pullUrl, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${token}`,
+                Authorization: authorization,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({ maxMessages: 10 }),
@@ -918,7 +1039,7 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
               await fetch(ackUrl, {
                 method: "POST",
                 headers: {
-                  Authorization: `Bearer ${token}`,
+                  Authorization: authorization,
                   "Content-Type": "application/json",
                 },
                 body: JSON.stringify({ ackIds }),
@@ -968,19 +1089,4 @@ export const gmailPlugin: ChannelPlugin<ResolvedGmailAccount> = {
       });
     },
   },
-};
-,
-  },
-};
-     }
-      });
-    },
-  },
-};
-,
-  },
-};
-},
-};
-},
 };

@@ -28,7 +28,8 @@
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
-    "PUBLISHING.md"
+    "PUBLISHING.md",
+    "secret-contract-api.ts"
   ],
   "peerDependencies": {
     "openclaw": ">=2026.1.0"

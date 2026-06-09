@@ -24,7 +24,21 @@
               "enabled": { "type": "boolean" },
               "projectId": { "type": "string" },
               "subscription": { "type": "string" },
-              "credentialsPath": { "type": "string" },
+              "credentialsPath": {
+                "oneOf": [
+                  { "type": "string" },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["source", "id"],
+                    "properties": {
+                      "source": { "enum": ["env", "file", "exec"] },
+                      "provider": { "type": "string" },
+                      "id": { "type": "string" }
+                    }
+                  }
+                ]
+              },
               "pollFallbackSec": { "type": "number" },
               "watchCommand": { "type": "string" },
               "watchRenewSec": { "type": "number" }
@@ -52,7 +66,21 @@
                     "enabled": { "type": "boolean" },
                     "projectId": { "type": "string" },
                     "subscription": { "type": "string" },
-                    "credentialsPath": { "type": "string" },
+                    "credentialsPath": {
+                      "oneOf": [
+                        { "type": "string" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["source", "id"],
+                          "properties": {
+                            "source": { "enum": ["env", "file", "exec"] },
+                            "provider": { "type": "string" },
+                            "id": { "type": "string" }
+                          }
+                        }
+                      ]
+                    },
                     "pollFallbackSec": { "type": "number" },
                     "watchCommand": { "type": "string" },
                     "watchRenewSec": { "type": "number" }

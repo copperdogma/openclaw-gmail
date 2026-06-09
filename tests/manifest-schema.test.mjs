@@ -15,3 +15,19 @@ test("manifest channel config schema accepts OpenClaw group access fields", () =
   assert.ok(accountSchema.properties.groupPolicy, "account groupPolicy should be declared");
   assert.ok(accountSchema.properties.groupAllowFrom, "account groupAllowFrom should be declared");
 });
+
+test("manifest channel config schema accepts SecretInput credentialsPath", () => {
+  const topLevelCredentialsPath = schema.properties.push.properties.credentialsPath;
+  const accountCredentialsPath = accountSchema.properties.push.properties.credentialsPath;
+
+  for (const credentialsPath of [topLevelCredentialsPath, accountCredentialsPath]) {
+    assert.deepEqual(
+      credentialsPath.oneOf.map((entry) => entry.type),
+      ["string", "object"],
+      "credentialsPath should accept plaintext paths and SecretInput objects",
+    );
+    const secretInputSchema = credentialsPath.oneOf.find((entry) => entry.type === "object");
+    assert.deepEqual(secretInputSchema.required, ["source", "id"]);
+    assert.deepEqual(secretInputSchema.properties.source.enum, ["env", "file", "exec"]);
+  }
+});
